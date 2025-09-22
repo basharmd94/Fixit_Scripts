@@ -216,4 +216,3 @@ send_mail(
 )
 
 print("[DONE] Email sent successfully.\n")
-

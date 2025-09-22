@@ -207,8 +207,8 @@ def main():
     try:
         # Extract report name from filename
         report_name = os.path.splitext(os.path.basename(__file__))[0]
-        # recipients = get_email_recipients(report_name)
-        recipients = ["ithmbrbd@gmail.com"] 
+        recipients = get_email_recipients(report_name)
+        #recipients = ["ithmbrbd@gmail.com"] 
         print(f"📬 Recipients: {recipients}")
     except Exception as e:
         print(f"⚠️ Failed to fetch recipients: {e}")
