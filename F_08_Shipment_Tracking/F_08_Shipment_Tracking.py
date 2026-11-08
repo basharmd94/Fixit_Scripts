@@ -174,7 +174,7 @@ def get_igrn(zid, start_date):
     return pd.read_sql(query, con=engine, params=[zid, zid, zid, 'IP--%', '5-Received', start_date])
 
 # Main Script
-start_date = datetime.datetime.now() - timedelta(days = 365)
+start_date = datetime.datetime.now() - timedelta(days =  2049)
 start_date = start_date.strftime("%Y-%m-%d")
 today_date = datetime.datetime.now().strftime("%Y-%m-%d")
 
@@ -312,26 +312,25 @@ for (ik,iv), (dk,dv) in zip(item_dict.items(), date_dict.items()):
     stock_0_gulshan[dk] = df_main.loc[df_main['gstock']<=0,['code','xdesc','cgrnnum','gstock']]
 
     shipment_dict[dk] = df_main
+import pandas as pd
 
-# Write Excel outputs
-writer = pd.ExcelWriter('shipment_main.xlsx', engine='openpyxl')
-for k,v in shipment_dict.items():
-    v.to_excel(writer,k, index=False)
-writer.save()
-writer.close()
+# Helper function to write dictionary of DataFrames to Excel
+def write_to_excel(writer, data_dict, suffix=""):
+    for k, v in data_dict.items():
+        name = k + suffix
+        v.to_excel(writer, name, index=False)
 
-writer2 = pd.ExcelWriter('error_main.xlsx', engine='openpyxl')
-for k,v in gs_error.items():
-    name = k + 'gs_error'
-    v.to_excel(writer2,name, index=False)
-for k,v in cs_error.items():
-    name = k + 'cs_error'
-    v.to_excel(writer2,name, index=False)
-for k,v in es_error.items():
-    name = k + 'es_error'
-    v.to_excel(writer2,name, index=False)
-writer2.save()
-writer2.close()
+# Writing shipment data
+with pd.ExcelWriter('shipment_main.xlsx', engine='openpyxl') as writer:
+    for k, v in shipment_dict.items():
+        v.to_excel(writer, k, index=False)
+
+# Writing error data
+with pd.ExcelWriter('error_main.xlsx', engine='openpyxl') as writer2:
+    write_to_excel(writer2, gs_error, suffix="gs_error")
+    write_to_excel(writer2, cs_error, suffix="cs_error")
+    write_to_excel(writer2, es_error, suffix="es_error")
+
 
 # Prepare email body sections
 html_sections = []

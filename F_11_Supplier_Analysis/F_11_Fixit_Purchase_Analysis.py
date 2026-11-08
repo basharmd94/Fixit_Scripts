@@ -27,7 +27,8 @@ CREDIT_SUPPLIER = ['SUP-000002','SUP-000005','SUP-000006','SUP-000007','SUP-0000
                    'SUP-000050','SUP-000051','SUP-000053','SUP-000055','SUP-000056','SUP-000058',
                     'SUP-000060','SUP-000062','SUP-000063','SUP-000066','SUP-000068','SUP-000069',
                     'SUP-000070','SUP-000153','SUP-000207','SUP-000277','SUP-000291','SUP-000299',
-                    'SUP-000327','SUP-000356', 'SUP-000464', 'SUP-000538', 'SUP-000612','SUP-000656', 'SUP-000673','SUP-000462'
+                    'SUP-000327','SUP-000356', 'SUP-000464', 'SUP-000538', 'SUP-000612','SUP-000656', 'SUP-000599',
+                    'SUP-000673','SUP-000462','SUP-000751'
                     ]
 
 print(f"📌 Processing for: Central Warehouse (ZID={ZID_CENTRAL})")
@@ -317,7 +318,7 @@ except Exception as e:
     print(f"⚠️ Failed to get recipients: {e}. Using fallback.")
     recipients = ["asaddat87@gmail.com", "fixitbdonline@gmail.com", "fixitc.central@gmail.com"]
 
-subject = f"Fixit Purchase Analysis – {TODAY_DATE}"
+subject = f"Fixit-11  Purchase Analysis – {TODAY_DATE}"
 body_text = "Please find today's Fixit Purchase Analysis report with detailed supplier analysis and financial summaries."
 
 # Prepare HTML content for email

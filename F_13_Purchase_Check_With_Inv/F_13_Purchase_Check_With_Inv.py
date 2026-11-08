@@ -1,300 +1,189 @@
-
-"""
-Inventory Check Against Purchase Report Generator.
-
-This module provides functionality to check and compare inventory movements
-against purchase orders, including GRN (Goods Received Note) verification.
-"""
-
 from datetime import datetime, timedelta, date
 from typing import Optional, Tuple
 
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 import os
 import sys
 import warnings
 
 
+# Add project root for shared modules (mail, config)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# === 2. Import shared modules ===
+# Import shared utilities
 from mail import send_mail, get_email_recipients
 from project_config import DATABASE_URL
 
-# === 3. Configuration ===
-
+# Create DB engine
 engine = create_engine(DATABASE_URL)
 
-# === 5. Suppress warnings ===
-
+# Pandas display + warning config
 warnings.filterwarnings('ignore', category=pd.errors.DtypeWarning)
 pd.set_option('display.float_format', '{:.2f}'.format)
 
-# Date constants
-NOW = datetime.now() 
-NOW_STR = NOW.strftime('%Y-%m-%d')
 
-# Example of date constants
-# NOW = datetime(2025, 9, 21)
-# NOW_STR = '2025-09-21'
-YESTERDAY = NOW - timedelta(1)
-YESTERDAY_STR = YESTERDAY.strftime('%Y-%m-%d')
+# ================= BUSINESS INPUT ================= #
 
+ZID_FIXIT = 100001
 
-def format_tuple_for_sql(items: tuple) -> str:
-    """Convert Python tuple to SQL-compatible string format."""
-    return str(tuple(items)).replace(",)", ")")
+TODAY = datetime.today().date()
+# TODAY_STR = TODAY.strftime("%Y-%m-%d")
+TODAY_STR = TODAY.strftime("%Y-%m-%d")
 
-def get_grn_details(zid: int, today_date: str) -> pd.DataFrame:
-    """
-    Fetch GRN (Goods Received Note) details for a specific date.
+print (TODAY_STR)
 
-    Args:
-        zid: Zone ID for the query
-        today_date: Date to fetch GRN details for
+# ================= FETCH FUNCTIONS ================= #
 
-    Returns:
-        DataFrame containing GRN details
-    """
-    query = """
+# ---------------- PURCHASE (GRN) ----------------
+def fetch_purchase(zid, today):
+    return pd.read_sql(text("""
         SELECT 
             pogrn.xdate,
             pogrn.xgrnnum,
             pogdt.xitem,
             caitem.xdesc,
-            pogdt.xqty as today_grn_qty
+            SUM(pogdt.xqty) AS today_grn_qty
         FROM pogrn
-        JOIN pogdt ON pogrn.xgrnnum = pogdt.xgrnnum
-        JOIN caitem ON pogdt.xitem = caitem.xitem
-        WHERE pogrn.zid = %s
-            AND pogdt.zid = %s
-            AND caitem.zid = %s
-            AND pogrn.xdate = '%s'
-    """
-    return pd.read_sql(query % (zid, zid, zid, today_date), con=engine)
+        JOIN pogdt 
+            ON pogrn.xgrnnum = pogdt.xgrnnum
+        JOIN caitem 
+            ON caitem.xitem = pogdt.xitem
+        WHERE pogrn.zid = :zid
+          AND pogdt.zid = :zid
+          AND caitem.zid = :zid
+          AND pogrn.xdate = :today
+        GROUP BY pogrn.xdate, pogrn.xgrnnum, pogdt.xitem, caitem.xdesc
+    """), engine, params={"zid": zid, "today": today})
 
 
-
-
-
-def get_inventory_stock(
-    zid: int,
-    execute_date: str,
-    item_list: Optional[Tuple[str, ...]] = None
-) -> pd.DataFrame:
-    """
-    Get inventory stock levels for specified items up to a given date.
-
-    Args:
-        zid: Zone ID for the query
-        execute_date: Date up to which to check stock
-        item_list: Tuple of item codes to check
-
-    Returns:
-        DataFrame containing stock levels
-    """
-    items_sql = format_tuple_for_sql(item_list)
-    query = """
-        SELECT
-            xitem,
-            sum(xqty * xsign) as stock
-        FROM imtrn
-        WHERE zid = %s
-            AND xdate <= '%s'
-            AND xitem in %s
-        GROUP BY xitem
-    """
-    return pd.read_sql(query % (zid, execute_date, items_sql), con=engine)
-
-
-
-def get_today_sales(
-    zid: int,
-    today_date: str,
-    item_list: Optional[Tuple[str, ...]] = None
-) -> pd.DataFrame:
-    """
-    Get sales details for specified items for a given date.
-
-    Args:
-        zid: Zone ID for the query
-        today_date: Date to fetch sales for
-        item_list: Tuple of item codes to check
-
-    Returns:
-        DataFrame containing sales details
-    """
-    items_sql = format_tuple_for_sql(item_list)
-    query = """
-        SELECT
+# ---------------- SALES (ONLY opord/opodt) ----------------
+def fetch_sales(zid, today):
+    return pd.read_sql(text("""
+        SELECT 
+            opord.xdate,
             opodt.xitem,
-            SUM(opodt.xqtyord) as today_sales_qty
+            SUM(opodt.xqtyord) AS today_sales_qty
         FROM opord
-        JOIN opodt ON opord.xordernum = opodt.xordernum
-        WHERE opord.zid = %s
-            AND opodt.zid = %s
-            AND opord.xdate = '%s'
-            AND opodt.xitem in %s
-        GROUP BY opodt.xitem
-    """
-    return pd.read_sql(query % (zid, zid, today_date, items_sql), con=engine)
+        JOIN opodt 
+            ON opord.xordernum = opodt.xordernum
+        WHERE opord.zid = :zid
+          AND opodt.zid = :zid
+          AND opord.xdate = :today
+        GROUP BY opord.xdate, opodt.xitem
+    """), engine, params={"zid": zid, "today": today})
 
-def get_inventory_check_grn(
-    zid: int,
-    grn_numbers: Optional[Tuple[str, ...]] = None
-) -> pd.DataFrame:
-    """
-    Check if GRN items are reflected in inventory.
 
-    Args:
-        zid: Zone ID for the query
-        grn_numbers: Tuple of GRN numbers to check
-
-    Returns:
-        DataFrame containing inventory entries for GRNs
-    """
-    grn_list = format_tuple_for_sql(grn_numbers)
-    query = """
-        SELECT
-            xdocnum,
+# ---------------- STOCK (IMTRN) ----------------
+def fetch_stock(zid, today):
+    return pd.read_sql(text("""
+        SELECT 
             xitem,
-            xqty as item_inserted_inv
+            SUM(CASE WHEN xdate < :today THEN xqty * xsign ELSE 0 END) AS yesterday_stock,
+            SUM(xqty * xsign) AS today_stock
         FROM imtrn
-        WHERE zid = %s
-            AND xdocnum in %s
-    """
-    return pd.read_sql(query % (zid, grn_list), con=engine)
+        WHERE zid = :zid
+        GROUP BY xitem
+    """), engine, params={"zid": zid, "today": today})
 
 
+# ---------------- INVENTORY POSTING CHECK ----------------
+def fetch_inventory_insert(zid, today):
+    return pd.read_sql(text("""
+        SELECT 
+            xitem,
+            SUM(xqty) AS item_inserted_inv
+        FROM imtrn
+        WHERE zid = :zid
+          AND xdate = :today
+          AND xsign = 1
+        GROUP BY xitem
+    """), engine, params={"zid": zid, "today": today})
 
-# Main execution
-ZID = 100001
-CHECK_DATE = NOW_STR  # Current date, e.g., '2025-09-21'
 
-# Get purchase/GRN details
-df_purchase = get_grn_details(ZID, CHECK_DATE)
+# ================= LOAD DATA ================= #
 
-# If no purchases, exit
-if df_purchase.empty:
-    subject = f"Fixit-13 Purchase Check With Inventory – {NOW_STR}"
-    body_text = "No purchases found for the given date."
-    send_mail(
-        subject=subject,
-        bodyText=body_text,
-        html_body=[],
-        attachment=[],
-        recipient=['ithmbrbd@gmail.com','fixitc.central@gmail.com','hmbrfixit@gmail.com']
-    )
-    print("No purchases found for the given date.")
-    
-    engine.dispose()
-    print("✅ Script completed successfully.")
+df_purchase = fetch_purchase(ZID_FIXIT, TODAY_STR)
+df_sales = fetch_sales(ZID_FIXIT, TODAY_STR)
+df_stock = fetch_stock(ZID_FIXIT, TODAY_STR)
+df_inv = fetch_inventory_insert(ZID_FIXIT, TODAY_STR)
 
-    sys.exit()
+# ================= MERGE ================= #
 
-# Get list of items from purchases
-grn_items_list = tuple(set(df_purchase['xitem'].to_list()))
-
-# Get yesterday's and today's stock
-prev_date = (datetime.strptime(CHECK_DATE, '%Y-%m-%d') - timedelta(1)).strftime('%Y-%m-%d')
-
-df_stock_yesterday = get_inventory_stock(ZID, prev_date, grn_items_list)
-df_stock_yesterday = df_stock_yesterday.rename(
-    columns={'stock': f'yesterday_stock_closing-{prev_date[-5:]}'}
-)
-
-df_stock_today = get_inventory_stock(ZID, CHECK_DATE, grn_items_list)
-df_stock_today = df_stock_today.rename(
-    columns={'stock': f'today_stock_closing-{CHECK_DATE[-5:]}'}
-)
-
-# Merge stock data
-df_balance = pd.merge(
-    df_stock_yesterday,
-    df_stock_today,
-    on=['xitem'],
-    how='outer'
-).fillna(0)
-
-# Get sales data
-df_sales = get_today_sales(ZID, CHECK_DATE, grn_items_list)
-
-# Merge purchase and sales data
-df_purchase_and_sales = pd.merge(
-    df_purchase,
+df = df_purchase.merge(
+    df_inv,
+    on="xitem",
+    how="left"
+).merge(
     df_sales,
-    on=['xitem'],
-    how='left'
-).fillna(0)
-
-# Merge with stock balance
-df_purchase_check_stock_balance = pd.merge(
-    df_purchase_and_sales,
-    df_balance,
-    on=['xitem'],
-    how='left'
+    on="xitem",
+    how="left"
+).merge(
+    df_stock,
+    on="xitem",
+    how="left"
 )
 
-# Check GRN entries in inventory
-grn_numbers = tuple(df_purchase_check_stock_balance['xgrnnum'].dropna().unique())
-check_grn_on_imtrn = get_inventory_check_grn(ZID, grn_numbers)
-check_grn_on_imtrn = check_grn_on_imtrn.rename(columns={'xdocnum': 'xgrnnum'})
+# Fill nulls
+df["item_inserted_inv"] = df["item_inserted_inv"].fillna(0)
+df["today_sales_qty"] = df["today_sales_qty"].fillna(0)
+df["yesterday_stock"] = df["yesterday_stock"].fillna(0)
+df["today_stock"] = df["today_stock"].fillna(0)
 
-# Final merge and column organization
-result_df = pd.merge(
-    df_purchase_check_stock_balance,
-    check_grn_on_imtrn,
-    on=['xgrnnum', 'xitem'],
-    how='left'
-)
+# ================= FINAL CALC ================= #
 
-# Organize columns in logical order
-result_df = result_df[[
-    'xdate',
-    'xgrnnum',
-    'xitem',
-    'xdesc',
-    'today_grn_qty',
-    'item_inserted_inv',
-    'today_sales_qty',
-    f'yesterday_stock_closing-{prev_date[-5:]}',
-    f'today_stock_closing-{CHECK_DATE[-5:]}'
+df["today_stock"] = df["yesterday_stock"] + df["today_grn_qty"] - df["today_sales_qty"]
+
+# ================= FORMAT OUTPUT ================= #
+
+df["xdate"] = TODAY_STR
+
+df = df[[
+    "xdate",
+    "xgrnnum",
+    "xitem",
+    "xdesc",
+    "today_grn_qty",
+    "item_inserted_inv",
+    "today_sales_qty",
+    "yesterday_stock",
+    "today_stock"
 ]]
 
+# Rename like your Excel style
+df.rename(columns={
+    "yesterday_stock": f"yesterday_stock_closing-{TODAY - timedelta(days=1):%m-%d}",
+    "today_stock": f"today_stock_closing-{TODAY:%m-%d}"
+}, inplace=True)
 
-# Email embeed dataframe grnnum, xitem, xdesc, today_grn_qty and item_inserted_inv and today_sales_qty
+# ================= EXPORT ================= #
 
-df_email = result_df[['xgrnnum', 'xitem', 'xdesc', 'today_grn_qty', 'item_inserted_inv', 'today_sales_qty']]
+file_name = "purchase_check_inventory.xlsx"
+df.to_excel(file_name, index=False)
 
-html_body = [(df_email, 'Purchase Check With Inventory')]
+# ================= EMAIL ================= #
 
-# export result_df to excel
-result_df.to_excel('result_df.xlsx', index=False)
-
-print("✅ Report generated successfully.")
-
-print("\n==[ EMAIL ]============================================")
 try:
     recipients = get_email_recipients(os.path.splitext(os.path.basename(__file__))[0])
-    print(f"[OK] Recipients: {recipients}")
-except Exception as e:
-    print(f"[WARN] Recipient lookup failed: {e} -> using fallback")
+except:
     recipients = ['ithmbrbd@gmail.com']
 
-subject = f"Fixit-13 Purchase Check With Inventory – {NOW_STR}"
-body_text = "Please find today's Purchase Check With Inventory report below."
+subject = f"Fixit-13 Purchase Check With Inventory – {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+body_text = "Please find the report attached."
 
+html_body = [
+    (df.head(20), "Top 20 Purchase Check Items")
+]
 
 send_mail(
     subject=subject,
     bodyText=body_text,
     html_body=html_body,
-    attachment=['result_df.xlsx'],
+    attachment=[file_name],
     recipient=recipients
 )
 
